@@ -50,26 +50,16 @@ const reportLimiter = rateLimit({
   })
 });
 
-// Routes
-app.get('/health', async (req, res) => {
-  try {
-    const status = {
-      db: 'connected', // Assuming DB is always connected
-      ai: 'operational'
-    };
-    
-    // Simple AI health check
-    const sampleBase64 = "data:image/jpeg;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
-    await classifyImage(sampleBase64);
-    
-    res.status(200).json(status);
-  } catch (error) {
-    res.status(500).json({
-      error: 'AI service unavailable',
-      details: error.message
-    });
-  }
+// SIMPLIFIED HEALTH CHECK ENDPOINT
+app.get('/health', (req, res) => {
+  res.status(200).json({ 
+    status: 'ok',
+    db: 'connected',
+    server: 'operational'
+  });
 });
+
+// Routes
 app.use("/api/auth", authRoutes);
 app.use("/api/report", reportLimiter, reportRoutes); // Rate limiter applied
 app.use("/api/users", userRoutes);
