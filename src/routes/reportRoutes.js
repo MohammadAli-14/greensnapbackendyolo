@@ -185,13 +185,26 @@ router.post('/', protectRoute, async (req, res) => {
 });
 
 // Test classification route
-router.get('/test-classify', async (req, res) => {
+// POST endpoint for test classification
+router.post('/test-classify', protectRoute, async (req, res) => {
   try {
-    const sampleBase64 = "data:image/jpeg;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
-    const result = await classifyImage(sampleBase64);
+    const { image } = req.body;
+    
+    if (!image) {
+      return res.status(400).json({ 
+        error: 'No image provided',
+        code: 'MISSING_IMAGE'
+      });
+    }
+
+    const result = await classifyImage(image);
     res.json(result);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('Test classification error:', error);
+    res.status(500).json({ 
+      error: 'Classification failed',
+      details: error.message
+    });
   }
 });
 
