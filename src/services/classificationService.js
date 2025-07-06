@@ -16,16 +16,24 @@ export default async function classifyImage(imageBase64) {
   
   // Return cached result if available
   if (imageCache.has(hash)) {
-    return imageCache.get(hash);
+    return { ...imageCache.get(hash), cacheHit: true };
   }
 
   const rawBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
   const ULTRALYTICS_API_KEY = process.env.ULTRALYTICS_API_KEY;
 
+  // TEMPORARY DEBUG LOG - REMOVE AFTER TESTING
+  console.log('Ultralytics API Key:', ULTRALYTICS_API_KEY ? '***' + ULTRALYTICS_API_KEY.slice(-4) : 'MISSING');
+
   try {
     const form = new FormData();
-    form.append('file', Buffer.from(rawBase64, 'base64'), 'image.jpg');
-    
+    // Create buffer from base64 and append to form with content type
+    form.append('file', Buffer.from(rawBase64, 'base64'), {
+      filename: 'image.jpg',
+      contentType: 'image/jpeg',
+      knownLength: Buffer.byteLength(rawBase64, 'base64')
+    });
+
     // Payload parameters
     const payload = {
       "model": "https://hub.ultralytics.com/models/ZVb5acmIVTVJsvn2CfpO",
@@ -41,8 +49,10 @@ export default async function classifyImage(imageBase64) {
 
     // Create AbortController for timeout
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000); // 10s timeout
+    const timeout = setTimeout(() => controller.abort(), 30000); // 30s timeout
 
+    console.log('Sending request to Ultralytics API...');
+    
     const response = await fetch("https://predict.ultralytics.com", {
       method: "POST",
       headers: {
@@ -54,14 +64,36 @@ export default async function classifyImage(imageBase64) {
     });
     clearTimeout(timeout);
 
+    console.log('Received response:', response.status);
+    
     if (!response.ok) {
       const errorText = await response.text();
+      console.error('API Error Details:', errorText);
       throw new Error(`API_ERROR: ${response.status} - ${errorText}`);
     }
 
     const data = await response.json();
-    const detections = data.images?.[0]?.results || [];
     
+    // DEBUG: Log the full API response
+    console.log('Full API Response:', JSON.stringify(data, null, 2));
+    
+    // Extract detections - handle different response formats
+    let detections = [];
+    if (data.images && data.images[0] && data.images[0].results) {
+      detections = data.images[0].results;
+    } else if (data.predictions && data.predictions[0] && data.predictions[0].detections) {
+      detections = data.predictions[0].detections;
+    } else {
+      console.warn('Unexpected response format:', Object.keys(data));
+    }
+
+    // TEMPORARY: Log all detected classes
+    console.log('All detected classes:', detections.map(d => ({
+      class: d.class, 
+      name: d.name, 
+      confidence: d.confidence
+    })));
+
     // Check for waste detections (class 0)
     const wasteDetections = detections.filter(det => det.class === 0);
     const maxConfidence = wasteDetections.length > 0 
@@ -102,7 +134,7 @@ export default async function classifyImage(imageBase64) {
     
     // Handle specific error cases
     if (error.name === 'AbortError') {
-      throw new Error('SERVICE_TIMEOUT: Request timed out after 10 seconds');
+      throw new Error('SERVICE_TIMEOUT: Request timed out after 30 seconds');
     } else if (error.message.includes('ECONNREFUSED') || error.message.includes('ENOTFOUND')) {
       throw new Error('SERVICE_DOWN: API server is unreachable');
     } else if (error.message.includes('SERVICE_TIMEOUT')) {

@@ -1,4 +1,3 @@
-// routes/reportRoutes.js
 import express from 'express';
 import Report from "../models/Report.js";
 import User from "../models/User.js";
@@ -65,8 +64,9 @@ router.post('/', protectRoute, async (req, res) => {
     // Only run AI check if user hasn't forced the submit
     if (!forceSubmit) {
       try {
-        // FIXED: Remove 'const' to use outer variable
+        console.log('Starting image classification...');
         classification = await classifyImage(image);
+        console.log('Classification result:', classification);
 
         // Handle classification result - NEW LOGIC
         if (!classification.isWaste) {
@@ -197,13 +197,17 @@ router.post('/test-classify', protectRoute, async (req, res) => {
       });
     }
 
+    console.log('Testing classification with image');
     const result = await classifyImage(image);
+    console.log('Classification result:', result);
+    
     res.json(result);
   } catch (error) {
     console.error('Test classification error:', error);
     res.status(500).json({ 
       error: 'Classification failed',
-      details: error.message
+      details: error.message,
+      stack: error.stack // Only for development!
     });
   }
 });
