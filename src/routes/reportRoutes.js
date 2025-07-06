@@ -7,12 +7,6 @@ import classifyImage from '../services/classificationService.js';
 
 const router = express.Router();
 
-// Add request logging middleware
-router.use((req, res, next) => {
-  console.log(`Incoming ${req.method} to ${req.path}`);
-  next();
-});
-
 router.post('/', protectRoute, async (req, res) => {
   try {
     const {
@@ -27,7 +21,6 @@ router.post('/', protectRoute, async (req, res) => {
       forceSubmit
     } = req.body;
 
-    // Server-side validation
     const base64Data = image.replace(/^data:image\/\w+;base64,/, '');
     const buffer = Buffer.from(base64Data, 'base64');
     if (buffer.length > 5 * 1024 * 1024) {
@@ -52,7 +45,6 @@ router.post('/', protectRoute, async (req, res) => {
       });
     }
 
-    // Base64 validation
     if (!/^(data:image\/\w+;base64,)?[A-Za-z0-9+/=]+$/.test(image)) {
       return res.status(400).json({
         message: 'Invalid image format',
@@ -61,14 +53,10 @@ router.post('/', protectRoute, async (req, res) => {
     }
 
     let classification;
-    // Only run AI check if user hasn't forced the submit
     if (!forceSubmit) {
       try {
-        console.log('Starting image classification...');
         classification = await classifyImage(image);
-        console.log('Classification result:', classification);
 
-        // Handle classification result - NEW LOGIC
         if (!classification.isWaste) {
           return res.status(400).json({
             message: 'Image does not show recognizable waste',
@@ -85,7 +73,6 @@ router.post('/', protectRoute, async (req, res) => {
           });
         }
       } catch (error) {
-        console.error('Classification Error:', error);
         return res.status(503).json({
           message: 'Waste verification service unavailable',
           code: 'SERVICE_UNAVAILABLE',
@@ -94,7 +81,6 @@ router.post('/', protectRoute, async (req, res) => {
       }
     }
 
-    // Cloudinary upload with timeout
     let uploadResponse;
     try {
       const cloudinaryPromise = cloudinary.uploader.upload(
@@ -112,7 +98,6 @@ router.post('/', protectRoute, async (req, res) => {
       );
       uploadResponse = await Promise.race([cloudinaryPromise, uploadTimeout]);
     } catch (uploadError) {
-      console.error('Cloudinary Upload Error:', uploadError);
       if (uploadError.message === 'CLOUDINARY_TIMEOUT') {
         return res.status(504).json({
           message: 'Image upload timed out',
@@ -126,7 +111,6 @@ router.post('/', protectRoute, async (req, res) => {
       });
     }
 
-    // Create report in DB
     const finalReportType = reportType || 'standard';
     const newReport = new Report({
       title: title.trim(),
@@ -141,7 +125,6 @@ router.post('/', protectRoute, async (req, res) => {
       },
       photoTimestamp: photoTimestamp ? new Date(photoTimestamp) : new Date(),
       user: req.user._id,
-      // Store classification data if available
       aiVerification: classification ? {
         isWaste: classification.isWaste,
         confidence: classification.confidence,
@@ -150,7 +133,6 @@ router.post('/', protectRoute, async (req, res) => {
     });
     const savedReport = await newReport.save();
 
-    // Update user points
     const pointsMap = { standard: 10, hazardous: 20, large: 15 };
     const pointsToAdd = pointsMap[finalReportType] || 10;
     try {
@@ -158,17 +140,16 @@ router.post('/', protectRoute, async (req, res) => {
         $inc: { reportCount: 1, points: pointsToAdd }
       });
     } catch (updateError) {
-      console.error('User update error:', updateError);
+      // Silent fail for user points update
     }
 
     res.status(201).json({
       message: 'Report created successfully',
       report: savedReport,
       pointsEarned: pointsToAdd,
-      classification: classification // Include classification in response
+      classification
     });
   } catch (error) {
-    console.error('Report Creation Error:', error);
     if (error.name === 'ValidationError') {
       return res.status(400).json({
         message: 'Validation Error',
