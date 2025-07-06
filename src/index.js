@@ -1,5 +1,5 @@
+import "dotenv/config"; // MUST BE FIRST IMPORT
 import express from "express";
-import "dotenv/config";
 import cors from "cors";
 import job from "./lib/cron.js";
 import rateLimit from "express-rate-limit";
@@ -15,8 +15,6 @@ const app = express();
 app.set('trust proxy', 1); // Trust reverse proxy
 
 const PORT = process.env.PORT || 3000;
-
-job.start(); // Start the cron job
 
 // Security and configuration
 app.use(express.json({ limit: '10mb' }));
@@ -76,13 +74,14 @@ app.use("/api/auth", authRoutes);
 app.use("/api/report", reportLimiter, reportRoutes); // Rate limiter applied
 app.use("/api/users", userRoutes);
 
-
-
-removeUnverifiedAccounts(); // Schedule task to remove unverified accounts
 // Start server
 app.listen(PORT, () => {
   console.log(`Server is listening on port: ${PORT}`);
   connectDB(); // Connect to MongoDB
+  
+  // Start cron job AFTER server starts and env vars are loaded
+  job.start();
+  removeUnverifiedAccounts(); // Schedule task to remove unverified accounts
 });
 
 app.use(errorMiddleware); // Error handling middleware

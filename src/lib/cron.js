@@ -33,37 +33,46 @@
 // * 0  0 1 1 * - At midnight on January 1st every year
 // * 0 * * * * - At every hour
 
-
 import cron from "cron";
-import https from "https";  // Changed back to https
+import https from "https";
 import { URL } from "url";
 
 const job = new cron.CronJob("*/14 * * * *", function () {
-  const apiUrl = new URL(process.env.API_URL);
-  
-  const options = {
-    hostname: apiUrl.hostname,
-    path: `${apiUrl.pathname}/health`.replace('//', '/'), // Ensure proper path
-    method: 'GET',
-    port: apiUrl.port || 443,
-    headers: {
-      'User-Agent': 'GreenSnap-Health-Check'
-    }
-  };
+  // Validate API_URL exists before using it
+  if (!process.env.API_URL) {
+    console.error("Health check failed: API_URL environment variable is not set");
+    return;
+  }
 
-  const req = https.request(options, (res) => {
-    if (res.statusCode === 200) {
-      console.log("Health check successful");
-    } else {
-      console.log(`Health check failed with status: ${res.statusCode}`);
-    }
-  });
+  try {
+    const apiUrl = new URL(process.env.API_URL);
+    
+    const options = {
+      hostname: apiUrl.hostname,
+      path: `${apiUrl.pathname}/health`.replace(/\/{2,}/g, '/'), // Improved path sanitization
+      method: 'GET',
+      port: apiUrl.port || 443,
+      headers: {
+        'User-Agent': 'GreenSnap-Health-Check'
+      }
+    };
 
-  req.on('error', (e) => {
-    console.error('Health check error:', e.message);
-  });
+    const req = https.request(options, (res) => {
+      if (res.statusCode === 200) {
+        console.log("Health check successful");
+      } else {
+        console.log(`Health check failed with status: ${res.statusCode}`);
+      }
+    });
 
-  req.end();
+    req.on('error', (e) => {
+      console.error('Health check connection error:', e.message);
+    });
+
+    req.end();
+  } catch (e) {
+    console.error('Health check setup failed:', e.message);
+  }
 });
 
 export default job;
