@@ -1,140 +1,114 @@
-// services/classificationService.js
 import fetch from 'node-fetch';
-import { Client } from "@gradio/client";
+import { Buffer } from 'buffer';
+import FormData from 'form-data';
+import { createHash } from 'crypto';
 
-// 📣 Log the model name as soon as this module is loaded
-console.log(`Using model: avatar77/wasteclassification`);
+// Thresholds
+const MIN_CONFIDENCE = 0.65;
+const HIGH_CONFIDENCE_THRESHOLD = 0.85;
 
-const DEFAULT_TIMEOUT = 60000; // 60s for cold starts
-const MIN_CONFIDENCE = 0.65;    // ⬆️ Updated to 65%
-const HIGH_CONFIDENCE_THRESHOLD = 0.85; // ⬇️ Updated to 85%
+// Cache setup (stores results for 5 minutes)
+const imageCache = new Map();
 
-/**
- * Low-level helper: POST to /predict then GET /predict/{event_id}
- * (not used currently, but can be reused for fallback or debugging)
- */
-async function callGradioAPI(rawBase64) {
-  const GRADIO_API_BASE = 'https://avatar77-wasteclassification.hf.space';
-  const postUrl = `${GRADIO_API_BASE}/gradio_api/call/predict`;
-
-  try {
-    const postResp = await fetch(postUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        data: [
-          {
-            path: `data:image/jpeg;base64,${rawBase64}`,
-            meta: { _type: "gradio.FileData" }
-          }
-        ]
-      }),
-      timeout: DEFAULT_TIMEOUT
-    });
-
-    if (!postResp.ok) throw new Error(`HF_API_POST_ERROR: ${postResp.status}`);
-    const postData = await postResp.json();
-    const eventId = postData.event_id;
-
-    if (!eventId) throw new Error('HF_API_ERROR: Missing event_id');
-
-    const getUrl = `${postUrl}/${eventId}`;
-    const startTime = Date.now();
-
-    while (Date.now() - startTime < DEFAULT_TIMEOUT) {
-      const getResp = await fetch(getUrl);
-      if (!getResp.ok) throw new Error(`HF_API_GET_ERROR: ${getResp.status}`);
-      const result = await getResp.json();
-
-      console.log("Raw Gradio GET response:", JSON.stringify(result, null, 2));
-
-      if (result.status === 'COMPLETE') return result;
-      await new Promise(resolve => setTimeout(resolve, 500));
-    }
-
-    throw new Error('HF_API_TIMEOUT: Prediction took too long');
-  } catch (err) {
-    console.error('Gradio API Error:', err);
-    throw new Error(`HF_API_ERROR: ${err.message}`);
-  }
-}
-
-/**
- * Classify an image using Gradio + Hugging Face API.
- * Adds confidence thresholds and verification level.
- *
- * @param {string} imageBase64 – data URI or base64 string
- * @returns {Promise<{
- *   isWaste: boolean,
- *   label: string,
- *   confidence: number,
- *   verification: string,
- *   isHighConfidence: boolean,
- *   isVerifiedWaste: boolean,
- *   modelVersion: string,
- *   needsImprovement: boolean
- * }>}
- */
 export default async function classifyImage(imageBase64) {
+  // Create MD5 hash of image for caching
+  const hash = createHash('md5').update(imageBase64).digest('hex');
+  
+  // Return cached result if available
+  if (imageCache.has(hash)) {
+    return imageCache.get(hash);
+  }
+
   const rawBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
+  const ULTRALYTICS_API_KEY = process.env.ULTRALYTICS_API_KEY;
 
   try {
-    const client = await Client.connect("avatar77/wasteclassification", {
-      timeout: DEFAULT_TIMEOUT
+    const form = new FormData();
+    form.append('file', Buffer.from(rawBase64, 'base64'), 'image.jpg');
+    
+    // Payload parameters
+    const payload = {
+      model: "https://hub.ultralytics.com/models/TsKHX94hZt3SDDcHARis",
+      imgsz: 640,
+      conf: 0.25,
+      iou: 0.45
+    };
+    
+    // Append payload parameters to form
+    Object.entries(payload).forEach(([key, value]) => {
+      form.append(key, value.toString());
     });
-    console.log("Connected to Gradio client");
 
-    const buffer = Buffer.from(rawBase64, 'base64');
-    const result = await client.predict("/predict", { img: buffer });
+    // Create AbortController for timeout
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000); // 10s timeout
 
-    console.log("Raw Gradio response:", JSON.stringify(result, null, 2));
+    const response = await fetch("https://predict.ultralytics.com", {
+      method: "POST",
+      headers: {
+        "x-api-key": ULTRALYTICS_API_KEY,
+        ...form.getHeaders()
+      },
+      body: form,
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
 
-    if (!result.data || !Array.isArray(result.data) || result.data.length === 0) {
-      throw new Error(`INVALID_RESPONSE: Empty data array`);
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`API_ERROR: ${response.status} - ${errorText}`);
     }
 
-    const prediction = result.data[0];
-    if (!prediction || typeof prediction !== 'object') {
-      throw new Error(`INVALID_RESPONSE: Expected object in data array`);
-    }
+    const data = await response.json();
+    const detections = data.images?.[0]?.results || [];
+    
+    // Check for waste detections (class 0)
+    const wasteDetections = detections.filter(det => det.class === 0);
+    const maxConfidence = wasteDetections.length > 0 
+      ? Math.max(...wasteDetections.map(det => det.confidence)) 
+      : 0;
 
-    const label = prediction.label || "Unknown";
-    const confidence = prediction.confidence || 0;
-    const labelLower = label.toLowerCase();
-
+    const isWaste = maxConfidence >= 0.25;
     let verification = "unverified";
-    if (labelLower.includes('waste')) {
-      if (confidence >= HIGH_CONFIDENCE_THRESHOLD) {
+    
+    if (isWaste) {
+      if (maxConfidence >= HIGH_CONFIDENCE_THRESHOLD) {
         verification = "high_confidence";
-      } else if (confidence >= MIN_CONFIDENCE) {
+      } else if (maxConfidence >= MIN_CONFIDENCE) {
         verification = "medium_confidence";
       }
     }
 
-    const isWaste = verification !== "unverified";
-
-    const isHighConfidence = confidence >= HIGH_CONFIDENCE_THRESHOLD;
-    const isVerifiedWaste = labelLower.includes('waste') && isHighConfidence;
-
-    const needsImprovement =
-      (labelLower.includes('waste') && confidence > 0.7 && confidence < 0.85) ||
-      (confidence > 0.9 && !labelLower.includes('waste'));
-
-    console.log(`Classification: ${label} (${confidence}) - Verification: ${verification}`);
-
-    return {
+    const result = {
       isWaste,
-      label: String(label),
-      confidence: parseFloat(confidence),
+      label: isWaste ? "waste" : "non-waste",
+      confidence: maxConfidence,
       verification,
-      isHighConfidence,
-      isVerifiedWaste,
-      modelVersion: "1.0",
-      needsImprovement
+      isHighConfidence: maxConfidence >= HIGH_CONFIDENCE_THRESHOLD,
+      isVerifiedWaste: isWaste && maxConfidence >= HIGH_CONFIDENCE_THRESHOLD,
+      modelVersion: "YOLOv8",
+      needsImprovement: isWaste && maxConfidence > 0.7 && maxConfidence < 0.85,
+      cacheHit: false
     };
 
-  } catch (err) {
-    console.error('Classification failed:', err);
-    throw new Error(`SERVICE_DOWN: ${err.message}`);
+    // Cache result for 5 minutes
+    imageCache.set(hash, result);
+    setTimeout(() => imageCache.delete(hash), 300000);
+
+    return result;
+
+  } catch (error) {
+    console.error('Ultralytics API Error:', error);
+    
+    // Handle specific error cases
+    if (error.name === 'AbortError') {
+      throw new Error('SERVICE_TIMEOUT: Request timed out after 10 seconds');
+    } else if (error.message.includes('ECONNREFUSED') || error.message.includes('ENOTFOUND')) {
+      throw new Error('SERVICE_DOWN: API server is unreachable');
+    } else if (error.message.includes('SERVICE_TIMEOUT')) {
+      throw new Error('SERVICE_TIMEOUT: Request timed out');
+    } else {
+      throw new Error(`SERVICE_ERROR: ${error.message}`);
+    }
   }
 }

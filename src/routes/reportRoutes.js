@@ -30,13 +30,13 @@ router.post('/', protectRoute, async (req, res) => {
 
     // Server-side validation
     const base64Data = image.replace(/^data:image\/\w+;base64,/, '');
-const buffer = Buffer.from(base64Data, 'base64');
-if (buffer.length > 5 * 1024 * 1024) {
-  return res.status(413).json({ 
-    message: 'Image too large (max 5MB)',
-    code: 'IMAGE_TOO_LARGE'
-  });
-}
+    const buffer = Buffer.from(base64Data, 'base64');
+    if (buffer.length > 5 * 1024 * 1024) {
+      return res.status(413).json({ 
+        message: 'Image too large (max 5MB)',
+        code: 'IMAGE_TOO_LARGE'
+      });
+    }
 
     const missingFields = [];
     if (!title) missingFields.push('title');
@@ -54,7 +54,7 @@ if (buffer.length > 5 * 1024 * 1024) {
     }
 
     // Base64 validation
-   if (!/^(data:image\/\w+;base64,)?[A-Za-z0-9+/=]+$/.test(image)) { // ✅ Allow prefix {
+    if (!/^(data:image\/\w+;base64,)?[A-Za-z0-9+/=]+$/.test(image)) {
       return res.status(400).json({
         message: 'Invalid image format',
         code: 'INVALID_IMAGE_FORMAT'
@@ -65,35 +65,34 @@ if (buffer.length > 5 * 1024 * 1024) {
     // Only run AI check if user hasn't forced the submit
     if (!forceSubmit) {
       try {
-       const classification = await classifyImage(image);
+        // FIXED: Remove 'const' to use outer variable
+        classification = await classifyImage(image);
 
-        // Handle classification result
-    if (!classification.isWaste) {
-      return res.status(400).json({
-        message: 'Image does not show recognizable waste',
-        classification,
-        code: 'NOT_WASTE'
-      });
-    }
-     if (classification.confidence < 0.7) {
-      return res.status(400).json({
-        message: 'Low confidence in waste detection',
-        classification,
-        code: 'LOW_CONFIDENCE'
-      });
-    }
-    
-}
-   catch (error) {
-        console.error('Classification Error:', error);
-    return res.status(503).json({
-      message: 'Waste verification service unavailable',
-      code: 'SERVICE_UNAVAILABLE',
-      error: error.message
-    });
+        // Handle classification result - NEW LOGIC
+        if (!classification.isWaste) {
+          return res.status(400).json({
+            message: 'Image does not show recognizable waste',
+            classification,
+            code: 'NOT_WASTE'
+          });
         }
+        
+        if (classification.confidence < 0.7) {
+          return res.status(400).json({
+            message: 'Low confidence in waste detection',
+            classification,
+            code: 'LOW_CONFIDENCE'
+          });
+        }
+      } catch (error) {
+        console.error('Classification Error:', error);
+        return res.status(503).json({
+          message: 'Waste verification service unavailable',
+          code: 'SERVICE_UNAVAILABLE',
+          error: error.message
+        });
       }
-    
+    }
 
     // Cloudinary upload with timeout
     let uploadResponse;
@@ -141,7 +140,13 @@ if (buffer.length > 5 * 1024 * 1024) {
         coordinates: [parseFloat(longitude), parseFloat(latitude)]
       },
       photoTimestamp: photoTimestamp ? new Date(photoTimestamp) : new Date(),
-      user: req.user._id
+      user: req.user._id,
+      // Store classification data if available
+      aiVerification: classification ? {
+        isWaste: classification.isWaste,
+        confidence: classification.confidence,
+        verification: classification.verification
+      } : null
     });
     const savedReport = await newReport.save();
 
@@ -159,7 +164,8 @@ if (buffer.length > 5 * 1024 * 1024) {
     res.status(201).json({
       message: 'Report created successfully',
       report: savedReport,
-      pointsEarned: pointsToAdd
+      pointsEarned: pointsToAdd,
+      classification: classification // Include classification in response
     });
   } catch (error) {
     console.error('Report Creation Error:', error);
@@ -178,14 +184,11 @@ if (buffer.length > 5 * 1024 * 1024) {
   }
 });
 
-
-// Add this temporary route to test classification
-// routes/reportRoutes.js
-// In routes/reportRoutes.js
+// Test classification route
 router.get('/test-classify', async (req, res) => {
   try {
-    const sampleBase64 = "data:image/jpeg;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="; // Test image
-    const result = await classifyImage(sampleBase64); // ✅ Should return classification
+    const sampleBase64 = "data:image/jpeg;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const result = await classifyImage(sampleBase64);
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
