@@ -36,11 +36,11 @@ const userSchema = new mongoose.Schema({
     default: Date.now,
   },
   resetPasswordResendCount: {
-  type: Number,
-  default: 0,
-  min: 0
-},
-resetPasswordCooldownExpires: Date,
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  resetPasswordCooldownExpires: Date,
   profileImage: {
     type: String,
     default: ""
@@ -61,7 +61,13 @@ resetPasswordCooldownExpires: Date,
   tokenVersion: {
     type: Number,
     default: 0
-  }
+  },
+  // NEW SECURITY FIELDS
+  resetPasswordVerified: {
+    type: Boolean,
+    default: false
+  },
+  resetPasswordVerifiedExpires: Date
 }, {
   timestamps: true
 });
@@ -110,7 +116,7 @@ userSchema.methods.generateToken = function() {
   );
 };
 
-// Generate password reset OTP (Added method)
+// Generate password reset OTP
 userSchema.methods.generateResetOTP = function() {
   // Generate a 5-digit OTP
   const otp = Math.floor(10000 + Math.random() * 90000);
@@ -121,6 +127,9 @@ userSchema.methods.generateResetOTP = function() {
 };
 
 userSchema.index({ reportCount: -1, points: -1 });
+// Add TTL index for automatic verification expiration
+userSchema.index({ resetPasswordVerifiedExpires: 1 }, { expireAfterSeconds: 0 });
+
 const User = mongoose.model("User", userSchema);
 
 export default User;

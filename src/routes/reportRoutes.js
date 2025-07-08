@@ -35,13 +35,41 @@ router.post('/', isAuthenticated, async (req, res) => {
     if (!image) missingFields.push('image');
     if (!details) missingFields.push('details');
     if (!address) missingFields.push('address');
-    if (!latitude || !longitude) missingFields.push('location');
+    
+    // Check if coordinates are provided
+    if (latitude === undefined || longitude === undefined) {
+      missingFields.push('location');
+    }
 
     if (missingFields.length > 0) {
       return res.status(400).json({
         message: `Missing required fields: ${missingFields.join(', ')}`,
         code: 'MISSING_FIELDS',
         missingFields
+      });
+    }
+
+    // Validate coordinate format and range
+    const lat = parseFloat(latitude);
+    const lon = parseFloat(longitude);
+    
+    if (isNaN(lat) || isNaN(lon)) {
+      return res.status(400).json({
+        message: 'Invalid coordinates',
+        code: 'INVALID_COORDINATES'
+      });
+    }
+    
+    // Validate coordinate ranges
+    if (lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+      return res.status(400).json({
+        message: 'Coordinates out of valid range',
+        code: 'INVALID_COORDINATES_RANGE',
+        details: {
+          validLatitudeRange: '[-90, 90]',
+          validLongitudeRange: '[-180, 180]',
+          received: { latitude: lat, longitude: lon }
+        }
       });
     }
 
@@ -121,7 +149,7 @@ router.post('/', isAuthenticated, async (req, res) => {
       reportType: finalReportType,
       location: {
         type: 'Point',
-        coordinates: [parseFloat(longitude), parseFloat(latitude)]
+        coordinates: [lon, lat]  // Use validated coordinates
       },
       photoTimestamp: photoTimestamp ? new Date(photoTimestamp) : new Date(),
       user: req.user._id,
